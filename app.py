@@ -8,9 +8,9 @@ from Model.Graph.graph import Graph
 from Model.Graph.node import Node
 from Model.Graph.edge import Edge
 from Model.Utils.RoadTypes import RoadTypes
-from Model.Utils.geo import haversine
+from Model.Utils.geo import haversine, cost_to_move, heuristic
 from Model.Pathfinding.dynamic_search import DStarLite
-
+from Model.Pathfinding.initial_search import AStar
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SAVE_PATH = os.path.join(BASE_DIR, "grafo.txt")
@@ -171,47 +171,6 @@ if "G" not in st.session_state:
 
 G: Graph = st.session_state.G
 
-
-# ====================================================================
-# AVISO: você tinha duas funções iguais converter_para_networkx
-# O código mantém as duas porque você pediu para NÃO ALTERAR NADA.
-# ====================================================================
-def converter_para_networkx(G):
-    nxg = nx.DiGraph()
-
-    for node_id, node_obj in G.nodes.items():
-        nxg.add_node(node_id, pos=(node_obj.lon, node_obj.lat))
-
-    count_edges = 0
-
-    for origem, lista in G.adjacency.items():
-        for edge in lista:
-
-            from_node = G.nodes[edge.from_node]
-            to_node = G.nodes[edge.to_node]
-
-            if getattr(edge, "distance", 0) and edge.distance > 0:
-                dist = edge.distance
-            else:
-                dist = haversine(
-                    from_node.lat, from_node.lon,
-                    to_node.lat, to_node.lon
-                )
-                edge.distance = dist
-
-            peso = dist * edge.traffic_factor
-
-            nxg.add_edge(
-                edge.from_node,
-                edge.to_node,
-                weight=peso,
-                traffic=edge.traffic_factor
-            )
-            count_edges += 1
-
-    return nxg
-
-
 # ====================================================================
 # PAINEL: ADICIONAR NÓ
 # ====================================================================
@@ -230,7 +189,6 @@ if st.sidebar.button("Adicionar Nó"):
         st.sidebar.success(f"Nó '{new_node_id}' adicionado e salvo.")
     except Exception:
         pass
-
 
 # ====================================================================
 # PAINEL: ADICIONAR ARESTA
@@ -325,57 +283,62 @@ distancia_total = None
 
 if st.sidebar.button("Calcular Rota"):
     try:
-        nxg = st.session_state.get("nxg", converter_para_networkx(G))
 
-        # CALCULA A ROTA USANDO A*
-        rota = nx.astar_path(nxg, origem, destino, weight="weight")
+        # ======================================================
+        # (A) PRIMEIRO: recalcula custo de TODAS as edges
+        # ======================================================
+        for lista in G.adjacency.values():
+            for edge in lista:
+                edge.cost = cost_to_move(G, edge.from_node, edge.to_node)
 
-        # soma pesos das arestas
-        distancia_total = sum(
-            nxg[rota[i]][rota[i+1]]["weight"]
-            for i in range(len(rota) - 1)
-        )
+        # ======================================================
+        # (B) A* USANDO SUA CLASSE
+        # ======================================================
+        astar = AStar(G)
+        rota, distancia_total = astar.search(origem, destino)
 
-        # verifica se existe trânsito
+        if rota is None:
+            st.error("Nenhuma rota encontrada com A*.")
+            raise Exception("Falha no A*")
+
+        # ======================================================
+        # (C) VERIFICA SE EXISTE TRÂNSITO
+        # ======================================================
         existe = any(
             edge.traffic_factor > 1
             for lista in G.adjacency.values()
             for edge in lista
         )
 
-        # se existir trânsito, ativa D* Lite
+        # ======================================================
+        # (D) SE EXISTIR TRÂNSITO → D* LITE
+        # ======================================================
         if existe:
             dstar = DStarLite(G, origem, destino)
 
-            # atualiza custos das arestas afetadas
+            # atualiza custo de todas as arestas novamente no D*
             for lista in G.adjacency.values():
                 for edge in lista:
-                    if edge.traffic_factor > 1:
-                        novo_custo = edge.distance * edge.traffic_factor
+                    novo = cost_to_move(G, edge.from_node, edge.to_node)
+                    dstar.update_edge_cost(edge.from_node, edge.to_node, novo)
 
-                        dstar.update_edge_cost(
-                            edge.from_node,
-                            edge.to_node,
-                            novo_custo
-                        )
-
-            # recalcula caminho
             nova = dstar.replan(origem)
 
             if nova:
-                rota = nova  # usa rota nova
-
-                # recalcula distância
+                rota = nova
                 distancia_total = sum(
-                    nxg[rota[i]][rota[i+1]]["weight"]
+                    cost_to_move(G, rota[i], rota[i+1])
                     for i in range(len(rota) - 1)
                 )
 
+        # ======================================================
+        # (E) EXIBE RESULTADOS
+        # ======================================================
         st.success(f"Rota encontrada: {rota}")
         st.info(f"Distância total: {distancia_total/1000:.2f} km")
 
-    except Exception:
-        pass
+    except Exception as e:
+        st.error(f"Erro ao calcular rota: {e}")
 
 
 # ====================================================================
