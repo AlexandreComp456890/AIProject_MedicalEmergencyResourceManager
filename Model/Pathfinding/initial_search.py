@@ -1,28 +1,10 @@
 import heapq
 import math
-from Model.Utils.geo import haversine
+from Model.Utils.geo import cost_to_move, heuristic
 
 class AStar:
     def __init__(self, graph):
         self.graph = graph
-
-    def cost_to_move(self, from_node, to_node) -> float:
-        edge = self.graph.get_edge(from_node, to_node)
-        
-        if edge:
-            #Velocidade em m/s
-            vmps = edge.speed_limit / 3.6
-            time_cost = edge.distance / vmps
-            return time_cost
-        return math.inf
-    
-    def heuristic(self, node_a, node_b) -> float:
-        edge = self.graph.get_edge(node_a, node_b)
-        
-        if edge:
-            heuristic_cost = edge.distance / (edge.speed_limit / 3.6) * edge.traffic_factor
-            return heuristic_cost
-        return math.inf
 
     def search(self, start, goal):
         open_set = []
@@ -44,12 +26,12 @@ class AStar:
 
             for edge in self.graph.neighbors(current):
                 neighbor = edge.to_node
-                tentative_g = g_score[current] + self.cost_to_move(current, neighbor)  
+                tentative_g = g_score[current] + cost_to_move(self.graph, current, neighbor)  
 
                 if tentative_g < g_score.get(neighbor, float('inf')):
                     came_from[neighbor] = current
                     g_score[neighbor] = tentative_g
-                    f_score = tentative_g + self.heuristic(neighbor, goal)
+                    f_score = tentative_g + heuristic(self.graph, neighbor, goal)
                     print(f"({current:<3} -> {neighbor:<3}) | f_score: ", f_score)
                     heapq.heappush(open_set, (f_score, neighbor))
 
